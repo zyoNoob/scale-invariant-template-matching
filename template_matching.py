@@ -232,77 +232,169 @@ class ScaleInvariantSurfMatcher:
 
         return result_img_output, homography_matrix, clipped_corners, status
 
-# Example Usage (can be removed or kept for testing)
-if __name__ == "__main__":
-    # Define paths relative to the script location or use absolute paths
-    script_dir = os.path.dirname(__file__) # Get directory where the script is located
-    template_path = os.path.join(script_dir, "template.png") # Example path
-    target_path = os.path.join(script_dir, "target.png")     # Example path
+class CannyEdgeMatcher:
+    """
+    Performs multi-scale template matching using Canny edge detection.
+    It iterates through different scales of the template image to find the best match.
+    """
+    def __init__(self, canny_low=0, canny_high=200, num_scales=150, min_scale=0.5, max_scale=2.0, match_threshold=0.25):
+        """
+        Initializes the Canny Edge Matcher.
 
-    # --- Create dummy images if they don't exist ---
-    if not os.path.exists(template_path):
-        print(f"Creating dummy template image at: {template_path}")
-        dummy_template = np.zeros((100, 100, 3), dtype=np.uint8)
-        cv2.rectangle(dummy_template, (20, 20), (80, 80), (255, 0, 0), -1) # Blue square
-        cv2.imwrite(template_path, dummy_template)
+        Args:
+            canny_low (int): Lower threshold for the Canny edge detector.
+            canny_high (int): Higher threshold for the Canny edge detector.
+            num_scales (int): Number of scales to check between min_scale and max_scale.
+            min_scale (float): The minimum scale factor for the template.
+            max_scale (float): The maximum scale factor for the template.
+            match_threshold (float): Minimum correlation coefficient (from TM_CCOEFF_NORMED)
+                                     to consider a match valid.
+        """
+        self.canny_low = canny_low
+        self.canny_high = canny_high
+        self.num_scales = num_scales
+        self.min_scale = min_scale
+        self.max_scale = max_scale
+        self.match_threshold = match_threshold
+        print(f"CannyEdgeMatcher initialized with thresholds ({canny_low}, {canny_high}), "
+              f"scale range [{min_scale}-{max_scale}] ({num_scales} steps), "
+              f"match threshold {match_threshold}")
 
-    if not os.path.exists(target_path):
-        print(f"Creating dummy target image at: {target_path}")
-        dummy_target = np.zeros((500, 500, 3), dtype=np.uint8)
-        # Place a slightly rotated/scaled version of the template
-        pts = np.array([[150, 150], [140, 260], [260, 280], [270, 170]], dtype=np.int32)
-        cv2.fillPoly(dummy_target, [pts], (255, 0, 0)) # Blue polygon
-        cv2.imwrite(target_path, dummy_target)
-    # --- End of dummy image creation ---
-
-
-    try:
-        # Initialize the matcher
-        matcher = ScaleInvariantSurfMatcher(hessian_threshold=100) # Adjust threshold if needed
-
-        # --- Option 1: Match using file paths ---
-        print("\n--- Matching using file paths ---")
-        result_img, H, corners, status = matcher.match(template_path, target_path, show_visualization=False)
-        print(f"Match Status: {status}")
-        if status == "Detected":
-            print("Homography Matrix:\n", H)
-            print("Detected Corners (clipped):\n", corners.reshape(-1, 2)) # Reshape for readability
-            cv2.imshow("Detection Result (Paths)", result_img)
-            cv2.waitKey(0)
-            cv2.destroyWindow("Detection Result (Paths)")
+    def _load_image(self, image_input, mode=cv2.IMREAD_GRAYSCALE):
+        """Loads an image from a path or uses the provided NumPy array (grayscale)."""
+        if isinstance(image_input, str):
+            if not os.path.exists(image_input):
+                raise FileNotFoundError(f"Image not found at: {image_input}")
+            img = cv2.imread(image_input, mode)
+            if img is None:
+                raise Exception(f"Could not load image from: {image_input}")
+            return img
+        elif isinstance(image_input, np.ndarray):
+            if len(image_input.shape) == 3 and mode == cv2.IMREAD_GRAYSCALE:
+                return cv2.cvtColor(image_input, cv2.COLOR_BGR2GRAY)
+            elif len(image_input.shape) == 2 and mode == cv2.IMREAD_COLOR:
+                 return cv2.cvtColor(image_input, cv2.COLOR_GRAY2BGR)
+            return image_input # Assume correct format otherwise
         else:
-            cv2.imshow("Detection Result (Paths) - Not Found", result_img)
-            cv2.waitKey(0)
-            cv2.destroyWindow("Detection Result (Paths) - Not Found")
+            raise TypeError("Input must be a file path (str) or a NumPy array.")
 
+    def match(self, template_input, target_input, scale=None, draw_result=True):
+        """
+        Finds the template in the target image using Canny edge matching.
+        If 'scale' is provided, it matches only at that scale. Otherwise, it
+        performs multi-scale matching.
 
-        # --- Option 2: Match using pre-loaded NumPy arrays ---
-        print("\n--- Matching using NumPy arrays ---")
-        template_np = cv2.imread(template_path) # Load as color initially
-        target_np = cv2.imread(target_path)
+        Args:
+            template_input (str | numpy.ndarray): File path or NumPy array of the template image.
+            target_input (str | numpy.ndarray): File path or NumPy array of the target image.
+            scale (float, optional): If provided, performs matching only at this specific scale factor.
+                                     Defaults to None (multi-scale matching).
+            draw_result (bool): If True, draws the bounding box on the result image.
 
-        if template_np is None or target_np is None:
-             print("Error: Could not load images for NumPy array test.")
+        Returns:
+            tuple: A tuple containing:
+                - result_image (numpy.ndarray): The target image (in color) with
+                  a bounding box drawn if found and draw_result is True.
+                - bounding_box (tuple or None): (x, y, w, h) of the best match, or None.
+                - best_scale (float or None): The scale factor of the best match, or None.
+                - max_correlation (float): The correlation value of the best match found.
+                - status (str): "Detected" or "Not Detected".
+        """
+        template_gray = self._load_image(template_input, cv2.IMREAD_GRAYSCALE)
+        target_color = self._load_image(target_input, cv2.IMREAD_COLOR) # Load color for drawing
+        target_gray = cv2.cvtColor(target_color, cv2.COLOR_BGR2GRAY)
+
+        if template_gray is None or target_gray is None:
+            return target_color, None, None, 0.0, "Error loading images"
+
+        (tH, tW) = template_gray.shape[:2]
+
+        # Compute Canny edges for the target image (only once)
+        target_edges = cv2.Canny(target_gray, self.canny_low, self.canny_high)
+
+        best_match = None # Store (max_val, max_loc, scale, width, height)
+
+        # Determine scales to check
+        if scale is not None:
+            scales_to_check = [scale]
+            print(f"Performing Canny Edge match at fixed scale: {scale:.2f}")
         else:
-            result_img_np, H_np, corners_np, status_np = matcher.match(template_np, target_np, show_visualization=False)
-            print(f"Match Status (NumPy): {status_np}")
-            if status_np == "Detected":
-                print("Homography Matrix (NumPy):\n", H_np)
-                print("Detected Corners (NumPy, clipped):\n", corners_np.reshape(-1, 2))
-                cv2.imshow("Detection Result (NumPy)", result_img_np)
-                cv2.waitKey(0)
-                cv2.destroyWindow("Detection Result (NumPy)")
-            else:
-                cv2.imshow("Detection Result (NumPy) - Not Found", result_img_np)
-                cv2.waitKey(0)
-                cv2.destroyWindow("Detection Result (NumPy) - Not Found")
+            scales_to_check = np.linspace(self.min_scale, self.max_scale, self.num_scales)[::-1]
+            print("Performing multi-scale Canny Edge match...")
 
-    except FileNotFoundError as e:
-        print(f"Error: {e}")
-    except AttributeError as e:
-         print(f"Error: {e}. Ensure 'opencv-contrib-python' is installed and compatible.")
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
 
-    finally:
-        cv2.destroyAllWindows() # Ensure all OpenCV windows are closed
+        # Loop over scales of the template (could be single or multiple scales)
+        for current_scale in scales_to_check:
+            # Calculate new dimensions based on scale, ensuring they are integers > 0
+            new_w = max(1, int(tW * current_scale))
+            new_h = max(1, int(tH * current_scale))
+            # Use cv2.resize
+            resized_template = cv2.resize(template_gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            (rH, rW) = resized_template.shape[:2]
+
+            # Check if resized template is larger than the target
+            if rW > target_gray.shape[1] or rH > target_gray.shape[0]:
+                # If using a fixed scale and it's too large, report and exit loop
+                if scale is not None:
+                    print(f"Warning: Provided scale {scale:.2f} results in template ({rW}x{rH}) larger than target ({target_gray.shape[1]}x{target_gray.shape[0]}).")
+                    best_match = None # Ensure no match is reported
+                    break # Exit loop
+                else:
+                    continue # Skip this scale in multi-scale search
+
+            # Compute Canny edges for the scaled template
+            template_edges = cv2.Canny(resized_template, self.canny_low, self.canny_high)
+
+            # Perform template matching
+            try:
+                # Ensure template edges are not empty and smaller than target edges
+                if template_edges.size == 0 or template_edges.shape[0] > target_edges.shape[0] or template_edges.shape[1] > target_edges.shape[1]:
+                    # print(f"Skipping scale {current_scale:.2f}: Invalid template edge dimensions.")
+                    continue
+
+                result = cv2.matchTemplate(target_edges, template_edges, cv2.TM_CCOEFF_NORMED)
+                (_, max_val, _, max_loc) = cv2.minMaxLoc(result)
+
+                # Update best match if current match is better (or if it's the only one)
+                if best_match is None or max_val > best_match[0]:
+                    best_match = (max_val, max_loc, current_scale, rW, rH)
+                    # If using fixed scale, we can break after the first successful match attempt
+                    # (or keep going if we only want the result from this specific scale regardless of others)
+                    # For simplicity, we let it complete the single iteration.
+
+            except cv2.error as e:
+                # print(f"Skipping scale {current_scale:.2f} due to cv2.error in matchTemplate: {e}")
+                # If using fixed scale and it errors, report and exit loop
+                if scale is not None:
+                    print(f"Error matching at fixed scale {scale:.2f}: {e}")
+                    best_match = None # Ensure no match is reported
+                    break # Exit loop
+                else:
+                    continue # Skip this scale in multi-scale search
+
+        # Process the best match found (if any)
+        result_img_output = target_color.copy()
+        bounding_box = None
+        best_scale_found = None # Use a different name to avoid confusion with input 'scale'
+        max_correlation = 0.0
+        status = "Not Detected"
+
+        if best_match is not None and best_match[0] >= self.match_threshold:
+            max_correlation, max_loc, best_scale_found, w, h = best_match
+            top_left = max_loc
+            bottom_right = (top_left[0] + w, top_left[1] + h)
+            bounding_box = (top_left[0], top_left[1], w, h)
+            status = "Detected"
+            print(f"Object detected with Canny Edges. Correlation: {max_correlation:.4f} at scale {best_scale_found:.2f}")
+
+            if draw_result:
+                cv2.rectangle(result_img_output, top_left, bottom_right, DRAW_COLOR, 2)
+        elif best_match is not None: # Match found but below threshold
+             max_correlation = best_match[0]
+             best_scale_found = best_match[2]
+             print(f"Template not detected (correlation {max_correlation:.4f} < threshold {self.match_threshold}). Best match was at scale {best_scale_found:.2f}.")
+        else: # No match found at all (e.g., scale too large or errored)
+             print(f"Template not detected. No valid matches found across checked scales.")
+
+
+        return result_img_output, bounding_box, best_scale_found, max_correlation, status
