@@ -41,7 +41,7 @@ class ScaleInvariantSurfMatcher:
             AttributeError: If the required SURF module is not found in the
                             current OpenCV installation (likely needs opencv-contrib-python).
         """
-        self.hessian_threshold = hessian_threshold
+        self.hessian_threshold = int(hessian_threshold)
         self.lowe_ratio = lowe_ratio
         self.min_match_count = min_match_count
 
