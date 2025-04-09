@@ -1,10 +1,11 @@
 # 🎯 Scale-Invariant Template Matching using OpenCV
 
-This repository provides Python classes for performing template matching in images, designed to be robust against changes in scale. It includes two main approaches:
+This repository provides Python classes for performing template matching in images, designed to be robust against changes in scale. It includes three main approaches:
 
 1.  **`ScaleInvariantSurfMatcher`**: Uses SURF (Speeded-Up Robust Features) for feature detection and matching, combined with FLANN (Fast Library for Approximate Nearest Neighbors) and homography estimation. This method is generally robust to rotation and perspective changes in addition to scale.
     *   **Note:** SURF is patented and might require installing `opencv-contrib-python` and may have licensing restrictions for commercial use.
 2.  **`CannyEdgeMatcher`**: Uses Canny edge detection on both the template and target images, then performs multi-scale template matching (`cv2.matchTemplate`) by resizing the *template* across a range of scales. This method is simpler and does not require `opencv-contrib-python`, but is primarily designed for scale invariance and may be less robust to significant rotation or perspective distortion compared to SURF. It also supports matching at a single, pre-defined scale.
+3.  **`ColorMatcher`**: Uses color images and multi-scale template matching (`cv2.TM_CCOEFF_NORMED`). Similar to `CannyEdgeMatcher` but operates directly on color information. Does not require `contrib` modules.
 
 ---
 
@@ -22,6 +23,11 @@ This repository provides Python classes for performing template matching in imag
     *   Efficient multi-scale search by resizing the template.
     *   Option to match at a single, fixed scale.
     *   Returns a simple bounding box (`x, y, w, h`) and the best scale found.
+-   **Color Method:**
+    *   Uses direct color template matching (`TM_CCOEFF_NORMED`).
+    *   Efficient multi-scale search (resizes template).
+    *   Option for fixed-scale matching.
+    *   Returns bounding box and best scale.
 
 ---
 
@@ -31,7 +37,7 @@ This repository provides Python classes for performing template matching in imag
 -   Linux (Tested, SURF/OpenCV dependencies might vary on other OS)
 -   OpenCV Contrib Python (`opencv-contrib-python`) - **Crucially, this project requires the `contrib` modules for SURF.**
 -   NumPy
--   **For `CannyEdgeMatcher`:** No extra OpenCV modules required beyond standard `opencv-python`.
+-   **For `CannyEdgeMatcher` and `ColorMatcher`:** No extra OpenCV modules required beyond standard `opencv-python`.
 
 ---
 
@@ -66,7 +72,7 @@ Import the desired matcher class(es) from `template_matching.py` and use their `
 # Example snippet from main.py
 
 import cv2
-from template_matching import ScaleInvariantSurfMatcher, CannyEdgeMatcher
+from template_matching import ScaleInvariantSurfMatcher, CannyEdgeMatcher, ColorMatcher
 
 # --- Define image paths ---
 template_path = "assets/template.png"
@@ -109,6 +115,30 @@ try:
 except Exception as e:
     print(f"Canny Fixed Scale Error: {e}")
 
+# --- Using ColorMatcher (Multi-Scale) ---
+try:
+    color_matcher = ColorMatcher(match_threshold=0.7)
+    result_img_color, bbox_color, scale_color, corr_color, status_color = color_matcher.match(template_path, target_path)
+    if status_color == "Detected":
+        print(f"Color (Multi-Scale): Template Found at scale {scale_color:.2f}!")
+        # cv2.imshow("Color Multi-Scale Result", result_img_color)
+        # cv2.waitKey(0)
+except Exception as e:
+    print(f"Color Multi-Scale Error: {e}")
+
+# --- Using ColorMatcher (Fixed Scale) ---
+try:
+    fixed_scale_color = 1.0 # Example scale
+    result_img_color_fixed, bbox_color_fixed, _, corr_color_fixed, status_color_fixed = color_matcher.match(
+        template_path, target_path, scale=fixed_scale_color
+    )
+    if status_color_fixed == "Detected":
+        print(f"Color (Fixed Scale {fixed_scale_color}): Template Found!")
+        # cv2.imshow("Color Fixed Scale Result", result_img_color_fixed)
+        # cv2.waitKey(0)
+except Exception as e:
+    print(f"Color Fixed Scale Error: {e}")
+
 
 cv2.destroyAllWindows()
 
@@ -131,11 +161,19 @@ cv2.destroyAllWindows()
 -   `max_correlation` (float): The correlation score (`TM_CCOEFF_NORMED`) of the best match found (even if below threshold).
 -   `status` (str): A message indicating the outcome: "Detected", "Not Detected (Reason)".
 
+#### `ColorMatcher`
+
+-   `result_image` (numpy.ndarray): The target image (color) with a bounding box drawn around the detected template (if found). If not found, it's the original color target image.
+-   `bounding_box` (tuple | None): Tuple `(x, y, w, h)` of the best match found, or `None`.
+-   `best_scale` (float | None): The scale factor at which the best match was found, or `None`.
+-   `max_correlation` (float): The correlation score (`TM_CCOEFF_NORMED`) of the best match found (even if below threshold).
+-   `status` (str): A message indicating the outcome: "Detected", "Not Detected".
+
 ---
 
 ## ⚙️ Configuration
 
-The `ScaleInvariantSurfMatcher` and `CannyEdgeMatcher` classes have several configurable parameters:
+The `ScaleInvariantSurfMatcher`, `CannyEdgeMatcher`, and `ColorMatcher` classes have several configurable parameters:
 
 ### `ScaleInvariantSurfMatcher`
 
@@ -164,6 +202,19 @@ The `ScaleInvariantSurfMatcher` and `CannyEdgeMatcher` classes have several conf
         *   `max_correlation`: The correlation score (`TM_CCOEFF_NORMED`) of the best match found (even if below threshold).
         *   `status`: String indicating result ("Detected", "Not Detected").
 
+### `ColorMatcher`
+
+*   **`__init__(self, num_scales=50, min_scale=0.5, max_scale=1.5, match_threshold=0.7)`**
+    *   Initializes the Color matcher parameters.
+    *   `num_scales`: Number of scales to check (only used for multi-scale matching).
+    *   `min_scale`, `max_scale`: Range of scaling factors (only used for multi-scale matching).
+    *   `match_threshold`: Minimum correlation coefficient (`TM_CCOEFF_NORMED`) for a valid detection.
+*   **`match(self, template_input, target_input, scale=None, draw_result=True)`**
+    *   Performs the matching process using color images.
+    *   `scale` (float, optional): If provided, performs matching only at this specific scale factor. If `None` (default), multi-scale matching is performed.
+    *   `draw_result`: If `True`, draws the bounding box on the result image.
+    *   **Returns:** `(result_image, bounding_box, best_scale, max_correlation, status)` (See Return Values section above).
+
 ---
 
 ## 🧠 How It Works
@@ -186,6 +237,17 @@ The `ScaleInvariantSurfMatcher` and `CannyEdgeMatcher` classes have several conf
 4.  **Fixed-Scale Matching:** If a specific scale is provided, matching is performed only at that scale.
 5.  **Find Best Match:** The scale and bounding box with the highest correlation score are selected.
 6.  **Draw Bounding Box:** The bounding box is drawn on the output image.
+
+### `ColorMatcher`
+
+1.  **Load Images:** Template and target images are loaded in color (BGR format). Alpha channels are removed if present.
+2.  **Multi-Scale/Fixed-Scale Loop:**
+    *   If `scale` is provided in `match()`, only that scale is used.
+    *   Otherwise, iterate through scales from `max_scale` down to `min_scale`.
+3.  **Resize Template:** The color template image is resized to the current scale.
+4.  **Template Matching:** `cv2.matchTemplate` with `cv2.TM_CCOEFF_NORMED` compares the resized color template against the color target image.
+5.  **Find Best Match:** Keep track of the scale and location (`max_loc`) that yield the highest correlation score (`max_val`).
+6.  **Check Threshold & Draw Box:** If the best `max_val` is above `match_threshold`, the status is "Detected", and a bounding box corresponding to the template's size at the best scale is drawn on the output image (if `draw_result` is True).
 
 ---
 

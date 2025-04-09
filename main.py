@@ -1,7 +1,7 @@
 import cv2
 import os
 import numpy as np # Import NumPy
-from template_matching import ScaleInvariantSurfMatcher, CannyEdgeMatcher # Import both classes
+from template_matching import ScaleInvariantSurfMatcher, CannyEdgeMatcher, ColorMatcher # Import all classes
 
 def main():
     print("Running template matching examples...")
@@ -122,6 +122,72 @@ def main():
         print(f"Error during Canny Edge (Fixed Scale) matching: {e}")
     except Exception as e:
         print(f"An unexpected error occurred during Canny Edge (Fixed Scale) matching: {e}")
+
+    # --- Color Matcher Example (Multi-Scale) ---
+    print("\n--- Running Color Matcher (Multi-Scale) ---")
+    try:
+        # 1. Initialize the Color matcher
+        # Adjust threshold, scales etc. as needed
+        color_matcher = ColorMatcher(match_threshold=0.7, num_scales=50, min_scale=0.7, max_scale=1.3)
+
+        # 2. Perform multi-scale matching
+        print(f"Matching template '{os.path.basename(template_path)}' in target '{os.path.basename(target_path)}' (Color, Multi-Scale)")
+        result_img_color_multi, bbox_color_multi, scale_color_multi, corr_color_multi, status_color_multi = color_matcher.match(template_path, target_path)
+
+        # 3. Process Multi-Scale Color results
+        print(f"Color Match Status (Multi-Scale): {status_color_multi}")
+        if status_color_multi == "Detected":
+            print("Color (Multi-Scale): Template found!")
+            print(f"Color Bounding Box (x, y, w, h): {bbox_color_multi}")
+            print(f"Color Best Scale Found: {scale_color_multi:.2f}")
+            print(f"Color Best Correlation: {corr_color_multi:.4f}")
+
+            # Display the result
+            cv2.imshow("Color Detection Result (Multi-Scale)", result_img_color_multi)
+            print("Displaying Color (Multi-Scale) result image. Press any key to close.")
+            cv2.waitKey(0)
+            cv2.destroyWindow("Color Detection Result (Multi-Scale)")
+        else:
+            print(f"Color (Multi-Scale): Template not found. Best correlation: {corr_color_multi:.4f}")
+
+    except FileNotFoundError as e:
+        print(f"Error during Color (Multi-Scale) matching: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred during Color (Multi-Scale) matching: {e}")
+
+    # --- Color Matcher Example (Fixed Scale) ---
+    print("\n--- Running Color Matcher (Fixed Scale) ---")
+    try:
+        # 1. Re-use or re-initialize the matcher
+        color_matcher_fixed = ColorMatcher(match_threshold=0.7) # Scales params not needed here
+
+        # 2. Perform fixed-scale matching - use scale found previously or a default
+        fixed_scale_color_test = scale_color_multi if 'scale_color_multi' in locals() and scale_color_multi else 1.0 # Example scale
+        print(f"Matching template '{os.path.basename(template_path)}' in target '{os.path.basename(target_path)}' (Color, Fixed Scale={fixed_scale_color_test})")
+        result_img_color_fixed, bbox_color_fixed, scale_color_fixed, corr_color_fixed, status_color_fixed = color_matcher_fixed.match(
+            template_path, target_path, scale=fixed_scale_color_test
+        )
+
+        # 3. Process Fixed-Scale Color results
+        print(f"Color Match Status (Fixed Scale): {status_color_fixed}")
+        if status_color_fixed == "Detected":
+            print(f"Color (Fixed Scale {fixed_scale_color_test}): Template found!")
+            print(f"Color Bounding Box (x, y, w, h): {bbox_color_fixed}")
+            print(f"Color Scale Used: {scale_color_fixed:.2f}")
+            print(f"Color Correlation: {corr_color_fixed:.4f}")
+
+            # Display the result
+            cv2.imshow(f"Color Detection Result (Fixed Scale {fixed_scale_color_test})", result_img_color_fixed)
+            print(f"Displaying Color (Fixed Scale {fixed_scale_color_test}) result image. Press any key to close.")
+            cv2.waitKey(0)
+            cv2.destroyWindow(f"Color Detection Result (Fixed Scale {fixed_scale_color_test})")
+        else:
+            print(f"Color (Fixed Scale {fixed_scale_color_test}): Template not found. Correlation: {corr_color_fixed:.4f}")
+
+    except FileNotFoundError as e:
+        print(f"Error during Color (Fixed Scale) matching: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred during Color (Fixed Scale) matching: {e}")
 
     finally:
         print("\nFinished examples. Closing any remaining OpenCV windows.")

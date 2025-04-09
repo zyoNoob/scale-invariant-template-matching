@@ -398,3 +398,159 @@ class CannyEdgeMatcher:
 
 
         return result_img_output, bounding_box, best_scale_found, max_correlation, status
+
+class ColorMatcher:
+    """
+    Performs multi-scale template matching using color images and cv2.matchTemplate.
+    It iterates through different scales of the template image to find the best match.
+    """
+    def __init__(self, num_scales=50, min_scale=0.5, max_scale=1.5, match_threshold=0.7):
+        """
+        Initializes the Color Matcher.
+
+        Args:
+            num_scales (int): Number of scales to check between min_scale and max_scale.
+            min_scale (float): The minimum scale factor for the template.
+            max_scale (float): The maximum scale factor for the template.
+            match_threshold (float): Minimum correlation coefficient (from TM_CCOEFF_NORMED)
+                                     to consider a match valid.
+        """
+        self.num_scales = num_scales
+        self.min_scale = min_scale
+        self.max_scale = max_scale
+        self.match_threshold = match_threshold
+        print(f"ColorMatcher initialized with scale range [{min_scale}-{max_scale}] ({num_scales} steps), "
+              f"match threshold {match_threshold}")
+
+    def _load_image(self, image_input, mode=cv2.IMREAD_COLOR):
+        """Loads an image from a path or uses the provided NumPy array (color by default)."""
+        if isinstance(image_input, str):
+            if not os.path.exists(image_input):
+                raise FileNotFoundError(f"Image not found at: {image_input}")
+            img = cv2.imread(image_input, mode)
+            if img is None:
+                raise Exception(f"Could not load image from: {image_input}")
+            return img
+        elif isinstance(image_input, np.ndarray):
+            # Ensure image is in the requested color mode
+            if mode == cv2.IMREAD_COLOR and len(image_input.shape) == 2:
+                return cv2.cvtColor(image_input, cv2.COLOR_GRAY2BGR)
+            elif mode == cv2.IMREAD_GRAYSCALE and len(image_input.shape) == 3:
+                 return cv2.cvtColor(image_input, cv2.COLOR_BGR2GRAY)
+            # Check if color image has alpha channel, remove if necessary for matchTemplate
+            elif mode == cv2.IMREAD_COLOR and len(image_input.shape) == 3 and image_input.shape[2] == 4:
+                 print("Warning: Input image has alpha channel, converting to BGR for matching.")
+                 return cv2.cvtColor(image_input, cv2.COLOR_BGRA2BGR)
+            return image_input # Assume correct format otherwise
+        else:
+            raise TypeError("Input must be a file path (str) or a NumPy array.")
+
+    def match(self, template_input, target_input, scale=None, draw_result=True):
+        """
+        Finds the template in the target image using multi-scale color template matching.
+        If 'scale' is provided, it matches only at that scale.
+
+        Args:
+            template_input (str | numpy.ndarray): File path or NumPy array of the template image.
+            target_input (str | numpy.ndarray): File path or NumPy array of the target image.
+            scale (float, optional): If provided, performs matching only at this specific scale factor.
+                                     Defaults to None (multi-scale matching).
+            draw_result (bool): If True, draws the bounding box on the result image.
+
+        Returns:
+            tuple: A tuple containing:
+                - result_image (numpy.ndarray): The target image (in color) with
+                  a bounding box drawn if found and draw_result is True.
+                - bounding_box (tuple or None): (x, y, w, h) of the best match, or None.
+                - best_scale (float or None): The scale factor of the best match, or None.
+                - max_correlation (float): The correlation value of the best match found.
+                - status (str): "Detected" or "Not Detected".
+        """
+        template_color = self._load_image(template_input, cv2.IMREAD_COLOR)
+        target_color = self._load_image(target_input, cv2.IMREAD_COLOR)
+
+        if template_color is None or target_color is None:
+            # Return original target color if loading failed, even if it's None
+            return target_color if target_color is not None else np.zeros((1,1,3), dtype=np.uint8), None, None, 0.0, "Error loading images"
+        if template_color.shape[2] != 3 or target_color.shape[2] != 3:
+             return target_color, None, None, 0.0, "Images must be 3-channel color for ColorMatcher"
+
+
+        (tH, tW) = template_color.shape[:2]
+
+        best_match = None # Store (max_val, max_loc, scale, width, height)
+
+        # Determine scales to check
+        if scale is not None:
+            scales_to_check = [scale]
+            print(f"Performing Color match at fixed scale: {scale:.2f}")
+        else:
+            scales_to_check = np.linspace(self.min_scale, self.max_scale, self.num_scales)[::-1]
+            print("Performing multi-scale Color match...")
+
+        # Loop over scales of the template
+        for current_scale in scales_to_check:
+            # Calculate new dimensions based on scale, ensuring they are integers > 0
+            new_w = max(1, int(tW * current_scale))
+            new_h = max(1, int(tH * current_scale))
+            # Use cv2.resize
+            resized_template = cv2.resize(template_color, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            (rH, rW) = resized_template.shape[:2]
+
+            # Check if resized template is larger than the target
+            if rW > target_color.shape[1] or rH > target_color.shape[0]:
+                if scale is not None:
+                    print(f"Warning: Provided scale {scale:.2f} results in template ({rW}x{rH}) larger than target ({target_color.shape[1]}x{target_color.shape[0]}).")
+                    best_match = None
+                    break
+                else:
+                    continue
+
+            # Perform template matching using color images
+            try:
+                # Ensure template is smaller than target in both dimensions
+                if rH > target_color.shape[0] or rW > target_color.shape[1]:
+                    # print(f"Skipping scale {current_scale:.2f}: Resized template ({rW}x{rH}) > target ({target_color.shape[1]}x{target_color.shape[0]})")
+                    continue
+
+                result = cv2.matchTemplate(target_color, resized_template, cv2.TM_CCOEFF_NORMED)
+                (_, max_val, _, max_loc) = cv2.minMaxLoc(result)
+
+                # Update best match if current match is better
+                if best_match is None or max_val > best_match[0]:
+                    best_match = (max_val, max_loc, current_scale, rW, rH)
+
+            except cv2.error as e:
+                if scale is not None:
+                    print(f"Error matching at fixed scale {scale:.2f}: {e}")
+                    best_match = None
+                    break
+                else:
+                    # print(f"Skipping scale {current_scale:.2f} due to cv2.error in matchTemplate: {e}")
+                    continue
+
+        # Process the best match found
+        result_img_output = target_color.copy()
+        bounding_box = None
+        best_scale_found = None
+        max_correlation = 0.0
+        status = "Not Detected"
+
+        if best_match is not None and best_match[0] >= self.match_threshold:
+            max_correlation, max_loc, best_scale_found, w, h = best_match
+            top_left = max_loc
+            bottom_right = (top_left[0] + w, top_left[1] + h)
+            bounding_box = (top_left[0], top_left[1], w, h)
+            status = "Detected"
+            print(f"Object detected with Color Matching. Correlation: {max_correlation:.4f} at scale {best_scale_found:.2f}")
+
+            if draw_result:
+                cv2.rectangle(result_img_output, top_left, bottom_right, DRAW_COLOR, 2)
+        elif best_match is not None: # Match found but below threshold
+             max_correlation = best_match[0]
+             best_scale_found = best_match[2]
+             print(f"Template not detected (correlation {max_correlation:.4f} < threshold {self.match_threshold}). Best match was at scale {best_scale_found:.2f}.")
+        else: # No match found at all
+             print(f"Template not detected. No valid matches found across checked scales.")
+
+        return result_img_output, bounding_box, best_scale_found, max_correlation, status
